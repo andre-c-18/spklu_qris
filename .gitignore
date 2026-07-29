@@ -1,0 +1,64 @@
+# ==========================================
+# 1. ORACLE INSTANT CLIENT (WAJIB IGNORE)
+# ==========================================
+# Mengabaikan folder client beserta isinya agar repo Git tidak bengkak
+instantclient_win/
+instantclient_linux/
+instantclient/
+oracle_interface/instantclient_win/
+oracle_interface/instantclient_linux/
+
+# Mengabaikan semua file biner C++ / library database
+*.dll
+*.so
+*.dylib
+
+# ==========================================
+# 2. PYTHON & ENVIRONMENTS
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Virtual Environments
+env/
+venv/
+.venv/
+ENV/
+
+# File konfigurasi rahasia (Passwords/Tokens)
+.env
+*.env
+*.local
+
+# ==========================================
+# 3. LOGS
+# ==========================================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ==========================================
+# 4. DEPENDENCIES & BUILD (NODE/JS)
+# ==========================================
+node_modules/
+dist/
+dist-ssr/
+
+# ==========================================
+# 5. EDITOR & OS SYSTEM FILES
+# ==========================================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

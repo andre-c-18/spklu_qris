@@ -1,0 +1,43 @@
+/* =========================================
+   Custom CSS untuk Kiosk Mode SPKLU
+========================================= */
+
+body {
+    background-color: #121212;
+    color: #ffffff;
+    /* Mencegah scroll di layar sentuh kiosk */
+    overflow: hidden; 
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* Container utama untuk setiap step */
+.step-container {
+    display: none;
+}
+
+/* Mempercantik kotak konfirmasi / tagihan */
+.card {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+    border-radius: 15px;
+}
+
+/* Styling untuk container QR Code agar menonjol */
+#qrcode-container {
+    border: 5px solid #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+    background-color: #ffffff;
+    padding: 10px;
+}
+
+/* Memperbesar ukuran input text/angka pada Kiosk */
+#input-nrp, #input-kwh {
+    font-size: 2.5rem;
+    font-weight: bold;
+    height: 80px;
+}
+
+.input-group-text {
+    font-size: 1.5rem;
+    font-weight: bold;
+}
