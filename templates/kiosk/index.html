@@ -3,71 +3,150 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SPKLU Kiosk Mode</title>
+    <title>SPKLU Kiosk Terminal</title>
+    <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Font Awesome 6 Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS Kiosk -->
     <link rel="stylesheet" href="/static/css/kiosk.css">
 </head>
 <body class="bg-dark text-white overflow-hidden d-flex justify-content-center align-items-center vh-100">
 
-    <div id="kiosk-container" class="w-100">
-    
+    <div id="kiosk-container" class="w-100 container">
+
+        <!-- ========================================== -->
+        <!-- STEP 0: STANDBY SCREEN (TOUCH TO START)    -->
+        <!-- ========================================== -->
         <div id="step-0" class="step-container text-center w-100" style="cursor: pointer;">
             <i class="fa-solid fa-charging-station display-1 mb-4 text-primary fa-bounce"></i>
-            <h1 class="display-4 fw-bold">SPKLU Ceres</h1>
-            <p class="fs-3 mt-3 text-warning">Sentuh layar untuk mulai</p>
+            <h1 class="display-3 fw-bold">SPKLU Station</h1>
+            <p class="fs-2 mt-3 text-warning">Sentuh Layar Untuk Memulai</p>
         </div>
 
-        <div id="step-1" class="step-container text-center w-50 mx-auto" style="display: none;">
-            <h2 class="mb-4">Informasi Pengguna</h2>
-            <div class="mb-4 text-start">
-                <label for="input-nrp" class="form-label fs-5 text-light">Employee Code (NRP)</label>
-                <input type="text" id="input-nrp" class="form-control form-control-lg text-center fw-bold" placeholder="Masukkan NRP Anda">
+        <!-- ========================================== -->
+        <!-- STEP 1: INPUT NRP (OTENTIKASI AKSES)        -->
+        <!-- ========================================== -->
+        <div id="step-1" class="step-container text-center w-50 mx-auto d-none">
+            <h2 class="mb-4 fw-bold"><i class="fa-solid fa-id-card me-2 text-primary"></i>Otentikasi NRP</h2>
+            <div class="mb-3 text-start">
+                <label for="input-nrp" class="form-label fs-5 text-light">Nomor Induk Karyawan (NRP)</label>
+                <input type="text" id="input-nrp" class="form-control form-control-lg text-center fw-bold fs-3 py-3" placeholder="Masukkan NRP Anda">
             </div>
+            <div id="nrp-error-msg" class="alert alert-danger fs-6 d-none mb-3" role="alert"></div>
             <div class="d-flex w-100 gap-3">
-                <button id="btn-cancel-nrp" class="btn btn-secondary btn-lg w-50"><i class="fa-solid fa-xmark"></i> Batal</button>
-                <button id="btn-start" class="btn btn-primary btn-lg w-50"><i class="fa-solid fa-bolt"></i> Mulai Charging</button>
+                <button id="btn-cancel-nrp" class="btn btn-secondary btn-lg w-50 py-3"><i class="fa-solid fa-xmark me-2"></i>Batal</button>
+                <button id="btn-verify-nrp" class="btn btn-primary btn-lg w-50 py-3">Lanjutkan <i class="fa-solid fa-arrow-right ms-2"></i></button>
             </div>
         </div>
 
-        <div id="step-2" class="step-container text-center" style="display: none;">
-            <h2 class="text-warning mb-4"><i class="fa-solid fa-plug-circle-bolt fa-beat"></i> Sedang Mengisi Daya</h2>
-            <div class="card bg-dark border-secondary my-4 p-4 mx-auto" style="width: 20rem;">
+        <!-- ========================================== -->
+        <!-- STEP RECOVERY: TAGIHAN TERTUNGGAK (UNPAID) -->
+        <!-- ========================================== -->
+        <div id="step-recovery" class="step-container text-center w-50 mx-auto d-none">
+            <i class="fa-solid fa-triangle-exclamation text-warning display-3 mb-3"></i>
+            <h2 class="fw-bold text-warning">Tagihan Tertunggak</h2>
+            <p class="fs-5 text-light">Halo, <strong id="unpaid-user-name" class="text-info">User</strong>. Anda memiliki pengisian daya sebelumnya yang belum dibayar.</p>
+            <div class="card bg-dark border-warning text-white my-3 p-3 text-center">
+                <p class="fs-6 text-muted mb-1">Total yang harus dibayar</p>
+                <h2 id="unpaid-amount" class="text-warning fw-bold mb-0">Rp 0</h2>
+            </div>
+            <button id="btn-pay-unpaid" class="btn btn-warning btn-lg w-100 py-3 fw-bold text-dark">
+                <i class="fa-solid fa-qrcode me-2"></i>Bayar Sekarang
+            </button>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- STEP SELECT FLOW: PRE-PAID VS POST-PAID    -->
+        <!-- ========================================== -->
+        <div id="step-select-flow" class="step-container text-center w-75 mx-auto d-none">
+            <h2 class="fw-bold mb-2">Selamat Datang, <span id="user-display-name" class="text-info">Karyawan</span></h2>
+            <p class="fs-5 text-muted mb-4">Pilih Metode Pengisian Daya</p>
+            
+            <div class="row g-4 justify-content-center">
+                <!-- Option 1: Pre-paid -->
+                <div class="col-md-5">
+                    <div class="card bg-secondary bg-opacity-25 border-primary h-100 p-4 text-center text-white" style="cursor: pointer;" id="btn-choose-prepaid">
+                        <i class="fa-solid fa-wallet display-4 text-primary mb-3"></i>
+                        <h4 class="fw-bold">Bayar di Awal (Pre-paid)</h4>
+                        <p class="small text-muted mb-0">Tentukan nominal biaya charging terlebih dahulu.</p>
+                    </div>
+                </div>
+                <!-- Option 2: Post-paid -->
+                <div class="col-md-5">
+                    <div class="card bg-secondary bg-opacity-25 border-success h-100 p-4 text-center text-white" style="cursor: pointer;" id="btn-choose-postpaid">
+                        <i class="fa-solid fa-charging-station display-4 text-success mb-3"></i>
+                        <h4 class="fw-bold">Bayar di Akhir (Post-paid)</h4>
+                        <p class="small text-muted mb-0">Langsung charging penuh, bayar sesuai kWh pemakaian.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- STEP INPUT PREPAID: INPUT NOMINAL BIYAA    -->
+        <!-- ========================================== -->
+        <div id="step-input-prepaid" class="step-container text-center w-50 mx-auto d-none">
+            <h2 class="fw-bold mb-4">Nominal Pengisian</h2>
+            <div class="mb-4 text-start">
+                <label for="input-prepaid-amount" class="form-label fs-5 text-light">Jumlah Biaya (Rp)</label>
+                <input type="number" id="input-prepaid-amount" class="form-control form-control-lg text-center fw-bold fs-3 py-3" placeholder="Contoh: 25000" min="5000" step="5000">
+            </div>
+            <button id="btn-submit-prepaid" class="btn btn-primary btn-lg w-100 py-3 fw-bold">Bayar Sekarang</button>
+        </div>
+
+        <!-- ========================================== -->
+        <!-- STEP 2: CHARGING IN PROGRESS               -->
+        <!-- ========================================== -->
+        <div id="step-2" class="step-container text-center d-none">
+            <h2 class="text-warning mb-4"><i class="fa-solid fa-plug-circle-bolt fa-beat me-2"></i>Sedang Mengisi Daya</h2>
+            <div class="card bg-dark border-secondary my-4 p-4 mx-auto" style="width: 22rem;">
                 <p class="fs-5 text-muted mb-1">Daya Terisi</p>
                 <h1 class="display-3 fw-bold text-info"><span id="live-kwh">0.00</span> <span class="fs-4">kWh</span></h1>
             </div>
-            <p class="text-danger small mb-4"><i class="fa-solid fa-lock"></i> Kabel dicolokkan dan terkunci otomatis.</p>
-            <button id="btn-stop" class="btn btn-danger btn-lg px-5 py-3 fw-bold"><i class="fa-solid fa-stop"></i> Selesai & Bayar</button>
+            <p class="text-danger small mb-4"><i class="fa-solid fa-lock me-1"></i>Kabel dicolokkan dan terkunci otomatis oleh PLC.</p>
+            <button id="btn-stop-charging" class="btn btn-danger btn-lg px-5 py-3 fw-bold fs-4"><i class="fa-solid fa-stop me-2"></i>Selesai & Bayar</button>
         </div>
 
-        <div id="step-3" class="step-container text-center" style="display: none;">
-            <h2>Tagihan Pembayaran</h2>
-            <div class="card bg-dark text-white border-light my-3 p-3 mx-auto text-start" style="width: 25rem;">
-                <p class="fs-5 mb-1">Daya: <strong id="bill-kwh" class="text-info">0</strong> kWh</p>
-                <p class="fs-4 fw-bold mb-0">Total: <span id="bill-price" class="text-warning">Rp 0</span></p>
+        <!-- ========================================== -->
+        <!-- STEP 3: TAGIHAN & SCAN QRIS BCA           -->
+        <!-- ========================================== -->
+        <div id="step-3" class="step-container text-center d-none">
+            <h2 class="fw-bold mb-3">Tagihan Pembayaran QRIS</h2>
+            <div class="card bg-dark text-white border-light my-3 p-3 mx-auto text-center" style="width: 25rem;">
+                <p class="fs-5 mb-1">Daya Terpakai: <strong id="bill-kwh" class="text-info">0.00 kWh</strong></p>
+                <p class="fs-3 fw-bold mb-0">Total: <span id="bill-price" class="text-warning">Rp 0</span></p>
             </div>
-            <div class="bg-white p-3 rounded-3 d-inline-block mb-3">
+            <div class="bg-white p-3 rounded-3 d-inline-block mb-3 shadow">
                 <div id="qrcode-container"></div>
             </div>
-            <p class="fs-5"><i class="fa-regular fa-clock"></i> Selesaikan pembayaran dalam <span id="timer" class="fw-bold text-warning">05:00</span></p>
+            <p class="fs-5"><i class="fa-regular fa-clock me-2"></i>Selesaikan pembayaran dalam <span id="timer-countdown" class="fw-bold text-warning">05:00</span></p>
         </div>
 
-        <div id="step-4" class="step-container text-center" style="display: none;">
+        <!-- ========================================== -->
+        <!-- STEP 4: PEMBAYARAN SUKSES / CHARGING DONE  -->
+        <!-- ========================================== -->
+        <div id="step-4" class="step-container text-center d-none">
             <i class="fa-solid fa-circle-check text-success display-1 mb-4"></i>
-            <h2>Pembayaran Berhasil!</h2>
-            <p class="fs-4 mt-3">Kabel telah terbuka (Unlocked).<br>Silakan cabut kabel dari kendaraan Anda.</p>
+            <h2 class="fw-bold">Pembayaran Berhasil!</h2>
+            <p class="fs-4 mt-3">Kabel telah terbuka (*Unlocked*).<br>Silakan cabut kabel dari kendaraan Anda.</p>
         </div>
 
-        <div id="step-5" class="step-container text-center" style="display: none;">
+        <!-- ========================================== -->
+        <!-- STEP 5: TIMEOUT / EXPIRED / FAIL           -->
+        <!-- ========================================== -->
+        <div id="step-5" class="step-container text-center d-none">
             <i class="fa-solid fa-circle-xmark text-danger display-1 mb-4"></i>
-            <h2>Waktu Habis / Transaksi Gagal</h2>
-            <p class="fs-4 mt-3">Silakan hubungi Admin atau Security<br>untuk membuka kunci kabel manual.</p>
+            <h2 class="fw-bold text-danger">Waktu Habis / Transaksi Gagal</h2>
+            <p class="fs-4 mt-3">Silakan hubungi Admin atau Security<br>untuk bantuan membuka kunci kabel secara manual.</p>
         </div>
 
     </div>
 
+    <!-- JavaScript Libraries -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Custom Kiosk Script -->
     <script src="/static/js/kiosk.js"></script>
 </body>
 </html>

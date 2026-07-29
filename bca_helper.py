@@ -1,145 +1,230 @@
-import os
-import hmac
+import base64
+import datetime
 import hashlib
+import hmac
 import json
-import requests
-from fastapi import HTTPException
-from datetime import datetime
+import os
 from zoneinfo import ZoneInfo
+import requests
 from dotenv import load_dotenv
+
+# Import PyCryptodome jika tersedia untuk RSA Signature asli BCA
+try:
+    from Crypto.Hash import SHA256
+    from Crypto.PublicKey import RSA
+    from Crypto.Signature import pkcs1_15
+
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
 
 load_dotenv()
 
-# Konfigurasi BCA dari file .env
-BCA_CLIENT_ID = os.getenv("BCA_CLIENT_ID", "")
-BCA_CLIENT_SECRET = os.getenv("BCA_CLIENT_SECRET", "")
-BCA_API_KEY = os.getenv("BCA_API_KEY", "")
-BCA_API_SECRET = os.getenv("BCA_API_SECRET", "")
-BCA_BASE_URL = os.getenv("BCA_BASE_URL", "https://sandbox.bca.co.id")
 
-def get_wib_time_iso():
-    """Mengembalikan waktu saat ini dalam format ISO 8601 (WIB)"""
-    return datetime.now(ZoneInfo("Asia/Jakarta")).isoformat(timespec='seconds')
+class BCAHelper:
 
-def get_bca_token():
-    """
-    Fungsi untuk mendapatkan Access Token dari BCA.
-    (Saat integrasi SNAP BI asli, proses ini butuh RSA Signature. 
-    Ini adalah representasi HTTP request standarnya).
-    """
-    url = f"{BCA_BASE_URL}/api/oauth/token"
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    payload = {"grant_type": "client_credentials"}
-    
-    try:
-        # Menggunakan Basic Auth untuk Client ID & Secret
-        response = requests.post(url, auth=(BCA_CLIENT_ID, BCA_CLIENT_SECRET), headers=headers, data=payload, timeout=10)
-        response.raise_for_status()
-        return response.json().get("access_token")
-    except Exception as e:
-        print(f"Error Token BCA: {e}")
-        return None
+    def __init__(self):
+        # Konfigurasi BCA dari file .env
+        self.client_id = os.getenv("BCA_CLIENT_ID", "")
+        self.client_secret = os.getenv("BCA_CLIENT_SECRET", "")
+        self.partner_id = os.getenv("BCA_PARTNER_ID", "12345")
+        self.merchant_id = os.getenv("BCA_MERCHANT_ID", "0000001")
+        self.terminal_id = os.getenv("BCA_TERMINAL_ID", "001")
+        self.base_url = os.getenv(
+            "BCA_BASE_URL", "https://sandbox.bca.co.id"
+        ).rstrip("/")
+        self.private_key_pem = os.getenv("BCA_PRIVATE_KEY", "")
 
-def generate_qris(price: float, trx_id: str) -> str:
-    """
-    Fungsi utama yang dipanggil oleh Kiosk untuk mencetak QR.
-    Jika API_KEY belum ada, otomatis mengembalikan Dummy QRIS.
-    """
-    # 1. CEK KETERSEDIAAN KREDENSIAL (MODE SIMULASI)
-    if not BCA_API_KEY or not BCA_API_SECRET:
-        print("⚠️ BCA API Keys kosong. Menggunakan Dummy QRIS.")
-        return f"00020101021226570011ID.CO.BCA.WWW0118...{int(price)}...{trx_id}"
+        # Flag Mode Simulasi / Mock
+        self.mock_mode = (
+            os.getenv("BCA_MOCK_MODE", "True").lower() == "true"
+            or not self.client_id
+        )
+        self._mock_poll_counter = {}
 
-    # 2. PROSES ASLI JIKA KREDENSIAL TERSEDIA
-    token = get_bca_token()
-    if not token:
-        raise ValueError("Gagal mendapatkan token dari BCA")
+    def get_wib_timestamp(self) -> str:
+        """Mengembalikan waktu saat ini dalam format ISO 8601 (WIB / Asia/Jakarta)"""
+        return datetime.datetime.now(ZoneInfo("Asia/Jakarta")).isoformat(
+            timespec="seconds"
+        )
 
-    timestamp = get_wib_time_iso()
-    relative_url = "/api/v1/qr/qr-mpm-generate" # Endpoint BCA SNAP
-    
-    # Body Request standar QRIS Dinamis
-    payload = {
-        "partnerReferenceNo": trx_id,
-        "amount": {
-            "value": f"{int(price)}.00",
-            "currency": "IDR"
-        },
-        "merchantId": "MERCHANT_ANDA", 
-        "terminalId": "SPKLU_01"
-    }
+    def _generate_rsa_signature(self, string_to_sign: str) -> str:
+        """Membuat RSA-SHA256 Signature untuk Access Token SNAP BCA"""
+        if not HAS_CRYPTO or not self.private_key_pem:
+            return "MOCK_RSA_SIGNATURE"
+        key = RSA.import_key(self.private_key_pem)
+        h = SHA256.new(string_to_sign.encode("utf-8"))
+        signature = pkcs1_15.new(key).sign(h)
+        return base64.b64encode(signature).decode("utf-8")
 
-    # 3. PEMBUATAN SIGNATURE HMAC-SHA (Standar Keamanan API)
-    body_str = json.dumps(payload, separators=(',', ':'))
-    body_hash = hashlib.sha256(body_str.encode('utf-8')).hexdigest().lower()
-    string_to_sign = f"POST:{relative_url}:{token}:{body_hash}:{timestamp}"
-    
-    signature = hmac.new(
-        BCA_API_SECRET.encode('utf-8'),
-        string_to_sign.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
+    def _generate_hmac_signature(
+        self,
+        http_method: str,
+        endpoint_url: str,
+        access_token: str,
+        payload_json: str,
+        timestamp: str,
+    ) -> str:
+        """Membuat HMAC-SHA512 Signature untuk Request Service SNAP BCA"""
+        minified_body = (
+            json.dumps(json.loads(payload_json)) if payload_json else ""
+        )
+        body_hash = (
+            hashlib.sha256(minified_body.encode("utf-8")).hexdigest().lower()
+        )
+        string_to_sign = f"{http_method.upper()}:{endpoint_url}:{access_token}:{body_hash}:{timestamp}"
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "X-TIMESTAMP": timestamp,
-        "X-SIGNATURE": signature,
-        "X-PARTNER-ID": BCA_CLIENT_ID,
-        "X-EXTERNAL-ID": trx_id
-    }
+        hmac_code = hmac.new(
+            self.client_secret.encode("utf-8"),
+            string_to_sign.encode("utf-8"),
+            hashlib.sha512,  # Standar SNAP BI
+        ).digest()
+        return base64.b64encode(hmac_code).decode("utf-8")
 
-    try:
-        response = requests.post(f"{BCA_BASE_URL}{relative_url}", headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        return data.get("qrContent") # Sesuaikan parameter balikan dari dokumen BCA asli
-    except Exception as e:
-        print(f"Error Generate QRIS BCA: {e}")
-        if hasattr(e, 'response') and e.response is not None:
-            print(f"Detail: {e.response.text}")
-        raise Exception("Gagal menghubungi server BCA")
+    def get_bca_token(self) -> str:
+        """Langkah 1: Mengambil B2B Access Token"""
+        if self.mock_mode:
+            return "mock_access_token_12345"
 
-def verify_signature(raw_body: bytes, headers: dict) -> bool:
-    """
-    Memvalidasi signature dari notifikasi webhook BCA untuk memastikan 
-    request benar-benar datang dari bank, bukan dari hacker.
-    """
-    # 1. CEK MODE SIMULASI (Jika .env belum diisi)
-    if not BCA_API_SECRET:
-        print("⚠️ Mode Simulasi: Melewati validasi signature webhook.")
-        return True
+        endpoint = "/snap/v1.0/access-token/b2b"
+        url = f"{self.base_url}{endpoint}"
+        timestamp = self.get_wib_timestamp()
+        string_to_sign = f"{self.client_id}|{timestamp}"
+        signature = self._generate_rsa_signature(string_to_sign)
 
-    # 2. AMBIL HEADER DARI BCA
-    # FastAPI membaca header dengan huruf kecil semua (case-insensitive)
-    x_signature = headers.get("x-signature") or headers.get("x-bca-signature")
-    x_timestamp = headers.get("x-timestamp") or headers.get("x-bca-timestamp")
+        headers = {
+            "X-TIMESTAMP": timestamp,
+            "X-CLIENT-KEY": self.client_id,
+            "X-SIGNATURE": signature,
+            "Content-Type": "application/json",
+        }
+        payload = {"grantType": "client_credentials"}
 
-    if not x_signature or not x_timestamp:
-        print("❌ Header BCA tidak lengkap!")
-        raise HTTPException(status_code=401, detail="Missing BCA Headers")
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
+            res.raise_for_status()
+            return res.json().get("accessToken")
+        except Exception as e:
+            print(f"[BCA Error Token]: {e}")
+            return None
 
-    # 3. HASH BODY REQUEST
-    # Kita menggunakan raw_body (bytes asli) agar tidak ada perbedaan spasi 
-    # yang bisa membuat hasil hash meleset.
-    body_hash = hashlib.sha256(raw_body).hexdigest().lower()
+    def generate_qris(self, price: float, trx_id: str) -> dict:
+        """Langkah 2: Generate Dynamic QRIS (QRIS MPM Generate)"""
+        if self.mock_mode:
+            print(f"[MOCK MODE] Generating Dummy QRIS for TRX: {trx_id}")
+            qr_content = f"00020101021226680014ID.BCA.WWW01189360091100108936009115204581253033605405{int(price):05d}5802ID5911CHARGING_ST6007JAKARTA61051234562070703A0163041A2B"
+            return {
+                "responseCode": "2004700",
+                "responseMessage": "Successful",
+                "partnerReferenceNo": trx_id,
+                "qrContent": qr_content,
+            }
 
-    # 4. SUSUN STRING TO SIGN
-    # Format ini adalah standar Webhook SNAP BI (HTTPMethod:RelativePath:BodyHash:Timestamp)
-    relative_url = "/api/bca-webhook" 
-    string_to_sign = f"POST:{relative_url}:{body_hash}:{x_timestamp}"
+        token = self.get_bca_token()
+        if not token:
+            raise Exception("Gagal mendapatkan Access Token dari BCA")
 
-    # 5. BUAT SIGNATURE PEMBANDING
-    expected_signature = hmac.new(
-        BCA_API_SECRET.encode('utf-8'),
-        string_to_sign.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
+        endpoint = "/snap/v1.0/qr/qr-mpm-generate"
+        url = f"{self.base_url}{endpoint}"
+        timestamp = self.get_wib_timestamp()
 
-    # 6. BANDINGKAN SIGNATURE SECARA AMAN (Mencegah Timing Attack)
-    if not hmac.compare_digest(expected_signature, x_signature):
-        print(f"❌ Signature Tidak Cocok!\nExpected: {expected_signature}\nGot: {x_signature}")
-        raise HTTPException(status_code=401, detail="Invalid Signature")
-    
-    print("✅ Signature BCA Valid!")
-    return True
+        payload = {
+            "partnerReferenceNo": trx_id,
+            "amount": {"value": f"{price:.2f}", "currency": "IDR"},
+            "merchantId": self.merchant_id,
+            "terminalId": self.terminal_id,
+            "validityPeriod": "15m",
+        }
+
+        payload_json = json.dumps(payload)
+        signature = self._generate_hmac_signature(
+            "POST", endpoint, token, payload_json, timestamp
+        )
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-TIMESTAMP": timestamp,
+            "X-SIGNATURE": signature,
+            "X-PARTNER-ID": self.partner_id,
+            "X-EXTERNAL-ID": trx_id,
+            "CHANNEL-ID": "95051",
+        }
+
+        try:
+            res = requests.post(
+                url, headers=headers, data=payload_json, timeout=10
+            )
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            print(f"[BCA Error Generate QRIS]: {e}")
+            raise Exception("Gagal menghubungi server BCA untuk Generate QRIS")
+
+    def check_qris_status(self, partner_ref_no: str) -> dict:
+        """Langkah 3: Memanggil API BCA QRIS MPM Inquiry (Dipanggil via Polling)"""
+        if self.mock_mode:
+            # Simulasi Polling: Polling ke-1 dan ke-2 status "01" (Pending), Polling ke-3 status "00" (PAID)
+            counter = self._mock_poll_counter.get(partner_ref_no, 0) + 1
+            self._mock_poll_counter[partner_ref_no] = counter
+
+            if counter < 3:
+                return {
+                    "responseCode": "2004700",
+                    "latestTransactionStatus": "01",
+                    "transactionStatusDesc": "Pending",
+                }
+            else:
+                return {
+                    "responseCode": "2004700",
+                    "latestTransactionStatus": "00",
+                    "transactionStatusDesc": "Success",
+                }
+
+        token = self.get_bca_token()
+        if not token:
+            return {
+                "latestTransactionStatus": "02",
+                "transactionStatusDesc": "Failed Token",
+            }
+
+        endpoint = "/snap/v1.0/qr/qr-mpm-query"
+        url = f"{self.base_url}{endpoint}"
+        timestamp = self.get_wib_timestamp()
+
+        payload = {
+            "originalPartnerReferenceNo": partner_ref_no,
+            "merchantId": self.merchant_id,
+            "serviceCode": "47",
+        }
+
+        payload_json = json.dumps(payload)
+        signature = self._generate_hmac_signature(
+            "POST", endpoint, token, payload_json, timestamp
+        )
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "X-TIMESTAMP": timestamp,
+            "X-SIGNATURE": signature,
+            "X-PARTNER-ID": self.partner_id,
+            "X-EXTERNAL-ID": partner_ref_no,
+            "CHANNEL-ID": "95051",
+        }
+
+        try:
+            res = requests.post(
+                url, headers=headers, data=payload_json, timeout=10
+            )
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            print(f"[BCA Error Check Status]: {e}")
+            return {
+                "latestTransactionStatus": "02",
+                "transactionStatusDesc": "API Error",
+            }
+
+# Instansiasi Objek Global agar siap di-import oleh router FastAPI
+bca_helper = BCAHelper()
