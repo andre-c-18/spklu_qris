@@ -11,6 +11,7 @@ $(document).ready(function () {
     let currentNrp = "";
     let currentFlowType = "POSTPAID"; // 'PREPAID' atau 'POSTPAID'
     let simulatedKwh = 0.00;
+    let currentTargetKwh = 0.00;
 
     // Timer Handlers
     let chargingInterval = null;
@@ -114,8 +115,8 @@ $(document).ready(function () {
     // =========================================================================
     $('#btn-submit-prepaid').click(function () {
         let amount = parseFloat($('#input-prepaid-amount').val());
-        if (!amount || amount < 5000) {
-            alert("Nominal pengisian minimal Rp 5.000");
+        if (!amount || amount < 1500) {
+            alert("Nominal pengisian minimal Rp 1.500");
             return;
         }
 
@@ -130,15 +131,14 @@ $(document).ready(function () {
             success: function (response) {
                 btn.prop('disabled', false).html('Bayar Sekarang');
                 currentTrxCode = response.transaction_code;
-
-                // Tampilkan Layar QRIS
-                $('#bill-kwh').text("-");
+                currentTargetKwh = response.target_kwh;
+                $('#bill-kwh').text(currentTargetKwh.toFixed(2) + " kWh (Kuota)");
                 renderQRIS(response.qr_content, response.amount);
                 showStep(3);
 
                 startCountdown(300); // 5 Menit Expired
                 startPolling(currentTrxCode, function () {
-                    // Success Callback -> Setelah Prepaid Lunas, Baru Mulai Charging!
+                    // Success Callback -> Setelah Prepaid Lunas, Jalankan Charging Sesuai Kuota Target
                     startPrepaidChargingSession();
                 });
             },
@@ -350,11 +350,35 @@ $(document).ready(function () {
 
     function startPrepaidChargingSession() {
         showStep(2);
-        startKwhSimulation();
-        setTimeout(function () {
-            clearInterval(chargingInterval);
-            showStep(4);
-            resetToStandbyAfterDelay(10000);
-        }, 15000);
+        simulatedKwh = 0.00;
+        $('#live-kwh').text("0.00");
+
+        $('#btn-stop-charging').hide();
+        if (chargingInterval) clearInterval(chargingInterval);
+
+        console.log(`[Prepaid Charging] Mulai pengisian daya. Target kuota: ${currentTargetKwh} kWh`);
+
+        chargingInterval = setInterval(function () {
+            simulatedKwh += 0.05; // Simulasi meteran berjalan
+            $('#live-kwh').text(simulatedKwh.toFixed(2));
+
+            if (simulatedKwh >= currentTargetKwh) {
+                clearInterval(chargingInterval);
+                
+                console.log("[Prepaid Charging] Kuota habis! Mematikan arus PLC...");
+                
+                // TODO Real Hardware: Panggil API / PLC Service untuk mematikan Relay
+                // $.post('/api/kiosk/plc/stop');
+
+                // Pindah ke Layar Pengisian Selesai (Step 4)
+                showStep(4);
+                
+                setTimeout(function() {
+                    $('#btn-stop-charging').show();
+                }, 1000);
+
+                resetToStandbyAfterDelay(10000);
+            }
+        }, 500); // Interval 0.5 detik
     }
 });

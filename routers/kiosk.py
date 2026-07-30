@@ -1,20 +1,33 @@
-import datetime
-from bca_helper import bca_helper
-from database import get_db
-from fastapi import APIRouter, Request, Depends, HTTPException
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.templating import Jinja2Templates
-import models
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+import models
+from bca_helper import bca_helper
+from database import get_db
 
 router = APIRouter(prefix="/api/kiosk", tags=["Kiosk Terminal"])
 templates = Jinja2Templates(directory="templates")
 
+# Helper Waktu WIB (Asia/Jakarta)
+def get_wib_now():
+    return datetime.now(ZoneInfo("Asia/Jakarta")).replace(tzinfo=None)
+
+PRICE_PER_KWH = 1500.0  # Tarif SPKLU per kWh
+
 # ==========================================
-# PYDANTIC SCHEMAS
+# PYDANTIC SCHEMAS (Request Body Validation)
 # ==========================================
 class VerifyNRPRequest(BaseModel):
     nrp: str
+
+
+class PrepaidCreateRequest(BaseModel):
+    nrp: str
+    amount: float
 
 
 class PostpaidStartRequest(BaseModel):
@@ -26,26 +39,28 @@ class PostpaidStopRequest(BaseModel):
     kwh_used: float
 
 
+# ==========================================
+# 1. VIEW ROUTE (Render UI Kiosk)
+# ==========================================
 @router.get("/")
 async def kiosk_home(request: Request):
     """Menampilkan halaman utama UI Terminal Kiosk"""
     return templates.TemplateResponse("kiosk/index.html", {"request": request})
 
+
 # ==========================================
-# 1. VERIFY NRP (Cek tabel user_pending)
+# 2. VERIFY NRP (Cek Tabel user_pending)
 # ==========================================
 @router.post("/verify-nrp")
 async def verify_nrp(req: VerifyNRPRequest, db: Session = Depends(get_db)):
-    """
-    Mengecek apakah NRP terdaftar di user_pending dengan status has_unpaid_bill == True.
-    """
+    """Mengecek apakah NRP terdaftar di user_pending dengan has_unpaid_bill == True."""
     pending_user = (
         db.query(models.UserPending)
         .filter(models.UserPending.nrp == req.nrp)
         .first()
     )
 
-    # TAHAN HANYA JIKA ADA RECORD DAN HAS_UNPAID_BILL == TRUE
+    # Jika ada tunggakan dari sesi sebelumnya -> Tahan & Arahkan ke Recovery
     if pending_user and pending_user.has_unpaid_bill:
         unpaid_trx = (
             db.query(models.Transaction)
@@ -66,7 +81,7 @@ async def verify_nrp(req: VerifyNRPRequest, db: Session = Depends(get_db)):
             "amount": float(unpaid_trx.price) if unpaid_trx else 0.0,
         }
 
-    # TIDAK ADA TUNGGAKAN -> LOLOSKAN
+    # Tidak ada tunggakan -> Loloskan
     return {
         "status": "SUCCESS",
         "message": "Lolos pengecekan, silakan lanjutkan.",
@@ -76,15 +91,61 @@ async def verify_nrp(req: VerifyNRPRequest, db: Session = Depends(get_db)):
 
 
 # ==========================================
-# 2. POSTPAID START (Set Flag in user_pending)
+# 3. FLOW 1: PRE-PAID (Create QRIS di Awal)
+# ==========================================
+@router.post("/prepaid/create-qris")
+async def prepaid_create_qris(
+    req: PrepaidCreateRequest, db: Session = Depends(get_db)
+):
+    if req.amount < 1500:
+        raise HTTPException(
+            status_code=400, detail="Nominal pengisian minimal Rp 1.500"
+        )
+
+    trx_code = f"TRX-PRE-{get_wib_now().strftime('%Y%m%d%H%M%S')}"
+
+    target_kwh = req.amount / PRICE_PER_KWH
+
+    try:
+        qris_res = bca_helper.generate_qris(price=req.amount, trx_id=trx_code)
+        qr_content = qris_res.get("qrContent")
+
+        # Simpan kwh_amount sebagai kuota target pengisian
+        new_trx = models.Transaction(
+            id=trx_code,
+            nrp=req.nrp,
+            flow_type="PREPAID",
+            kwh_amount=target_kwh,  # Target kWh tersimpan di DB
+            price=req.amount,
+            qris_string=qr_content,
+            status="PENDING",
+        )
+        db.add(new_trx)
+        db.commit()
+
+        return {
+            "transaction_code": trx_code,
+            "qr_content": qr_content,
+            "amount": req.amount,
+            "target_kwh": round(target_kwh, 2),
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail=f"Gagal generate QRIS Prepaid: {str(e)}"
+        )
+
+# ==========================================
+# 4. FLOW 2: POST-PAID START (Set Flag user_pending)
 # ==========================================
 @router.post("/postpaid/start")
 async def postpaid_start(
     req: PostpaidStartRequest, db: Session = Depends(get_db)
 ):
-    trx_code = f"TRX-POST-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+    """Flow 2: Langsung mulai charging & tandai flag tunggakan di user_pending."""
+    trx_code = f"TRX-POST-{get_wib_now().strftime('%Y%m%d%H%M%S')}"
 
-    # Cari atau buat record di tabel user_pending
+    # Cari atau catat NRP di tabel user_pending
     pending_user = (
         db.query(models.UserPending)
         .filter(models.UserPending.nrp == req.nrp)
@@ -97,13 +158,13 @@ async def postpaid_start(
     else:
         pending_user.has_unpaid_bill = True
 
-    # Buat Transaksi Baru
+    # Buat Transaksi Sesi Charging
     new_trx = models.Transaction(
         id=trx_code,
         nrp=req.nrp,
         flow_type="POSTPAID",
-        kwh_amount=0.0,
-        price=0.0,
+        kwh_amount=0.00,
+        price=0.00,
         status="CHARGING",
     )
     db.add(new_trx)
@@ -115,12 +176,13 @@ async def postpaid_start(
 
 
 # ==========================================
-# 3. POSTPAID STOP (Generate QRIS Tagihan)
+# 5. FLOW 2: POST-PAID STOP (Generate QRIS Tagihan)
 # ==========================================
 @router.post("/postpaid/stop")
 async def postpaid_stop(
     req: PostpaidStopRequest, db: Session = Depends(get_db)
 ):
+    """Flow 2: Stop charging -> Hitung Tagihan Pemakaian -> Generate QRIS."""
     trx = (
         db.query(models.Transaction)
         .filter(models.Transaction.id == req.transaction_code)
@@ -134,7 +196,6 @@ async def postpaid_stop(
 
     # TODO: Panggil PLC Helper untuk Matikan Relay (snap7)
 
-    PRICE_PER_KWH = 1500.0
     total_price = req.kwh_used * PRICE_PER_KWH
 
     try:
@@ -157,17 +218,18 @@ async def postpaid_stop(
         trx.status = "FAILED"
         db.commit()
         raise HTTPException(
-            status_code=500, detail=f"Gagal generate QRIS: {str(e)}"
+            status_code=500, detail=f"Gagal generate QRIS Postpaid: {str(e)}"
         )
 
 
 # ==========================================
-# 4. AJAX POLLING INQUIRY (Clear Flag saat Lunas)
+# 6. CORE AJAX POLLING: QRIS MPM INQUIRY
 # ==========================================
 @router.get("/check-status/{transaction_code}")
 async def check_qris_status_polling(
     transaction_code: str, db: Session = Depends(get_db)
 ):
+    """Endpoint ini dipanggil berulang kali oleh jQuery AJAX Polling tiap 3 detik."""
     trx = (
         db.query(models.Transaction)
         .filter(models.Transaction.id == transaction_code)
@@ -179,17 +241,25 @@ async def check_qris_status_polling(
             status_code=404, detail="Transaksi tidak ditemukan."
         )
 
+    res_payload = {
+        "status": trx.status,
+        "qr_content": trx.qris_string,
+        "price": float(trx.price),
+        "kwh_amount": float(trx.kwh_amount),
+    }
+
     if trx.status == "PAID":
-        return {"status": "PAID", "message": "Pembayaran lunas!"}
+        res_payload["message"] = "Pembayaran lunas!"
+        return res_payload
 
     if trx.status in ["PENDING", "UNPAID"]:
         bca_res = bca_helper.check_qris_status(partner_ref_no=transaction_code)
         bca_status = bca_res.get("latestTransactionStatus")
 
-        if bca_status == "00":  # LUNAS
+        if bca_status == "00":  # LUNAS / PAID
             trx.status = "PAID"
 
-            # UNFLAG UNPAID BILL
+            # Hapus Flag Unpaid Bill dari user_pending
             pending_user = (
                 db.query(models.UserPending)
                 .filter(models.UserPending.nrp == trx.nrp)
@@ -199,14 +269,16 @@ async def check_qris_status_polling(
                 pending_user.has_unpaid_bill = False
 
             db.commit()
-            return {
-                "status": "PAID",
-                "message": "Pembayaran Berhasil Dikonfirmasi!",
-            }
+            res_payload["status"] = "PAID"
+            res_payload["message"] = "Pembayaran Berhasil Dikonfirmasi!"
+            return res_payload
 
         elif bca_status == "02":  # EXPIRED
             trx.status = "EXPIRED"
             db.commit()
-            return {"status": "EXPIRED", "message": "Waktu pembayaran expired."}
+            res_payload["status"] = "EXPIRED"
+            res_payload["message"] = "Waktu pembayaran expired."
+            return res_payload
 
-    return {"status": trx.status, "message": "Menunggu pembayaran..."}
+    res_payload["message"] = "Menunggu pembayaran..."
+    return res_payload
