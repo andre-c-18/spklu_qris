@@ -7,7 +7,7 @@ import io
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import models
+import models as models
 from database import get_db
 
 def get_wib_time():

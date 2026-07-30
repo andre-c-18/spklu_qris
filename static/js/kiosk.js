@@ -1,6 +1,6 @@
 /**
  * SPKLU / Charging Station Kiosk Application Controller
- * Tech Stack: jQuery, Bootstrap 5, FastAPI Backend
+ * Tech Stack: jQuery, Bootstrap 5, FastAPI Backend (SQLAlchemy + BCA QRIS)
  */
 
 $(document).ready(function () {
@@ -46,7 +46,7 @@ $(document).ready(function () {
     });
 
     // =========================================================================
-    // STEP 1: VALIDASI NRP & CEK TUNGGAKAN
+    // STEP 1: VALIDASI NRP & CEK TUNGGAKAN (user_pending)
     // =========================================================================
     $('#btn-verify-nrp').click(function () {
         currentNrp = $('#input-nrp').val().trim();
@@ -67,17 +67,19 @@ $(document).ready(function () {
             success: function (response) {
                 btn.prop('disabled', false).html('Lanjutkan <i class="fas fa-arrow-right ms-2"></i>');
 
-                // SKENARIO A: Memiliki Tagihan Tertunggak (Recovery Flow)
+                // SKENARIO A: Memiliki Tagihan Tertunggak di user_pending (Recovery Flow)
                 if (response.status === "UNPAID_BILL_FOUND") {
                     currentTrxCode = response.unpaid_trx_code;
                     $('#unpaid-user-name').text(response.name);
-                    $('#unpaid-amount').text("Rp " + response.amount.toLocaleString('id-ID'));
+                    
+                    let unpaidAmount = parseFloat(response.amount) || 0;
+                    $('#unpaid-amount').text("Rp " + unpaidAmount.toLocaleString('id-ID'));
 
                     showStep('recovery');
                     return;
                 }
 
-                // SKENARIO B: NRP Valid -> Pindah ke Layar Pilih Mode (Flow 1 / Flow 2)
+                // SKENARIO B: Bebas Tunggakan -> Pindah ke Layar Pilih Mode (Prepaid / Postpaid)
                 $('#user-display-name').text(response.name);
                 showStep('select-flow');
             },
@@ -130,6 +132,7 @@ $(document).ready(function () {
                 currentTrxCode = response.transaction_code;
 
                 // Tampilkan Layar QRIS
+                $('#bill-kwh').text("-");
                 renderQRIS(response.qr_content, response.amount);
                 showStep(3);
 
@@ -227,7 +230,8 @@ $(document).ready(function () {
             success: function (response) {
                 btn.prop('disabled', false).html('Bayar Tagihan Sekarang');
 
-                renderQRIS(response.qr_content || "", response.amount || 0);
+                $('#bill-kwh').text((response.kwh_amount || 0) + " kWh");
+                renderQRIS(response.qr_content || "", response.price || response.amount || 0);
                 showStep(3);
 
                 startCountdown(300);
@@ -244,7 +248,7 @@ $(document).ready(function () {
     // CORE FUNCTION 1: QR CODE RENDERER
     // =========================================================================
     function renderQRIS(qrString, priceAmount) {
-        let formattedPrice = typeof priceAmount === 'number' ? priceAmount : 0;
+        let formattedPrice = parseFloat(priceAmount) || 0;
         $('#bill-price').text("Rp " + formattedPrice.toLocaleString('id-ID'));
         $('#qrcode-container').empty();
 
@@ -327,13 +331,19 @@ $(document).ready(function () {
     }
 
     // =========================================================================
-    // HELPER: UTILITAS AUTO-RESET TO STANDBY
+    // HELPER: UTILITAS AUTO-RESET TO STANDBY & RESET STATE
     // =========================================================================
     function resetToStandbyAfterDelay(delayMs) {
         setTimeout(function () {
             if (chargingInterval) clearInterval(chargingInterval);
             if (pollingTimer) clearInterval(pollingTimer);
             if (countdownTimer) clearInterval(countdownTimer);
+            
+            // Bersihkan State Variabel Global
+            currentTrxCode = "";
+            currentNrp = "";
+            simulatedKwh = 0.00;
+
             showStep(0);
         }, delayMs);
     }
