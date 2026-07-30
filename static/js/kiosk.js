@@ -343,6 +343,7 @@ $(document).ready(function () {
             currentTrxCode = "";
             currentNrp = "";
             simulatedKwh = 0.00;
+            currentTargetKwh = 0.00;
 
             showStep(0);
         }, delayMs);
